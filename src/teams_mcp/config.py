@@ -26,7 +26,7 @@ class TeamsConfig(BaseSettings):
     
     # Server settings
     server_name: str = Field("teams-mcp", env="MCP_SERVER_NAME")
-    server_version: str = Field("0.1.3", env="MCP_SERVER_VERSION")
+    server_version: str = Field("0.2.0", env="MCP_SERVER_VERSION")
     
     # Debug
     debug: bool = Field(False, env="DEBUG")
