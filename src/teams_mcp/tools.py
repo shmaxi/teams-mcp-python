@@ -14,7 +14,7 @@ def create_list_chats_tool(client: TeamsClient) -> Tool:
         
         return await client.list_chats(access_token)
     
-    return Tool(
+    tool = Tool(
         name="teams_list_chats",
         description="List all chats for the authenticated user",
         inputSchema={
@@ -26,9 +26,12 @@ def create_list_chats_tool(client: TeamsClient) -> Tool:
                 }
             },
             "required": ["access_token"]
-        },
-        handler=handler
+        }
     )
+    
+    # Attach handler
+    setattr(tool, 'handler', handler)
+    return tool
 
 
 def create_create_chat_tool(client: TeamsClient) -> Tool:
@@ -45,7 +48,7 @@ def create_create_chat_tool(client: TeamsClient) -> Tool:
         
         return await client.create_chat(access_token, chat_type, members)
     
-    return Tool(
+    tool = Tool(
         name="teams_create_chat",
         description="Create a new chat",
         inputSchema={
@@ -67,9 +70,12 @@ def create_create_chat_tool(client: TeamsClient) -> Tool:
                 }
             },
             "required": ["access_token", "members"]
-        },
-        handler=handler
+        }
     )
+    
+    # Attach handler
+    setattr(tool, 'handler', handler)
+    return tool
 
 
 def create_send_message_tool(client: TeamsClient) -> Tool:
@@ -88,7 +94,7 @@ def create_send_message_tool(client: TeamsClient) -> Tool:
         
         return await client.send_message(access_token, chat_id, content)
     
-    return Tool(
+    tool = Tool(
         name="teams_send_message",
         description="Send a message to a chat",
         inputSchema={
@@ -108,9 +114,12 @@ def create_send_message_tool(client: TeamsClient) -> Tool:
                 }
             },
             "required": ["access_token", "chat_id", "content"]
-        },
-        handler=handler
+        }
     )
+    
+    # Attach handler
+    setattr(tool, 'handler', handler)
+    return tool
 
 
 def create_get_messages_tool(client: TeamsClient) -> Tool:
@@ -127,7 +136,7 @@ def create_get_messages_tool(client: TeamsClient) -> Tool:
         
         return await client.get_messages(access_token, chat_id, limit)
     
-    return Tool(
+    tool = Tool(
         name="teams_get_messages",
         description="Get messages from a chat",
         inputSchema={
@@ -148,6 +157,9 @@ def create_get_messages_tool(client: TeamsClient) -> Tool:
                 }
             },
             "required": ["access_token", "chat_id"]
-        },
-        handler=handler
+        }
     )
+    
+    # Attach handler
+    setattr(tool, 'handler', handler)
+    return tool
