@@ -1,6 +1,6 @@
 [project]
 name = "teams-mcp-python"
-version = "0.1.1"
+version = "0.1.2"
 description = "Microsoft Teams MCP server with reusable OAuth2 authentication"
 readme = "README.md"
 license = { text = "MIT" }

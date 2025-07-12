@@ -146,4 +146,4 @@ cython_debug/
 
 # Windows
 Thumbs.db
-ehthumbs.db
+ehthumbs.db.mcp.json
