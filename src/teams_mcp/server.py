@@ -6,6 +6,7 @@ from typing import List
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
+from mcp.types import ServerCapabilities
 
 from mcp_oauth2 import OAuth2Config, MicrosoftProvider, create_oauth2_tools
 from .config import TeamsConfig
@@ -93,12 +94,15 @@ class TeamsServer:
             init_options = InitializationOptions(
                 server_name=self.config.server_name,
                 server_version=self.config.server_version,
+                capabilities=ServerCapabilities(
+                    tools={}  # We register tools dynamically
+                )
             )
             
             await self.server.run(
                 read_stream,
                 write_stream,
-                init_options
+                initialization_options=init_options
             )
 
 
