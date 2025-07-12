@@ -1,119 +1,180 @@
-"""Teams MCP Server implementation."""
+"""Teams MCP Server implementation using FastMCP."""
 
 import logging
-import asyncio
-from typing import List
-from mcp.server import Server
-from mcp.server.models import InitializationOptions
-from mcp.server.stdio import stdio_server
-from mcp.types import ServerCapabilities
+from typing import List, Dict, Any, Optional
+from mcp.server.fastmcp import FastMCP
 
-from mcp_oauth2 import OAuth2Config, MicrosoftProvider, create_oauth2_tools
+from mcp_oauth2 import OAuth2Config, MicrosoftProvider
 from .config import TeamsConfig
 from .api import TeamsClient
-from .tools import (
-    create_list_chats_tool,
-    create_create_chat_tool,
-    create_send_message_tool,
-    create_get_messages_tool
-)
 
 logger = logging.getLogger(__name__)
 
+# Initialize configuration
+config = TeamsConfig()
 
-class TeamsServer:
-    """Teams MCP Server."""
+# Create FastMCP server
+mcp = FastMCP(config.server_name)
+
+# Initialize Teams client
+teams_client = TeamsClient()
+
+# Set up OAuth2 provider
+oauth_config = OAuth2Config(
+    client_id=config.azure_client_id,
+    client_secret=config.azure_client_secret,
+    redirect_uri=config.redirect_uri,
+    scopes=config.scopes
+)
+oauth_provider = MicrosoftProvider(oauth_config, config.azure_tenant_id)
+
+# Set up logging
+if config.debug:
+    logging.basicConfig(level=logging.DEBUG)
+
+
+# OAuth2 Tools
+@mcp.tool()
+async def is_authenticated(
+    tokens: Optional[Dict[str, Any]] = None,
+    callback_url: Optional[str] = None,
+    callback_state: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Check if the provided tokens are valid for Microsoft. If no tokens provided, generates auth URL."""
+    import json
+    import secrets
     
-    def __init__(self, config: TeamsConfig):
-        self.config = config
-        self.server = Server(self.config.server_name)
-        self.teams_client = TeamsClient()
-        
-        # Set up OAuth2 provider
-        oauth_config = OAuth2Config(
-            client_id=config.azure_client_id,
-            client_secret=config.azure_client_secret,
-            redirect_uri=config.redirect_uri,
-            scopes=config.scopes
-        )
-        self.oauth_provider = MicrosoftProvider(oauth_config, config.azure_tenant_id)
-        
-        # Set up logging
-        if config.debug:
-            logging.basicConfig(level=logging.DEBUG)
-        
-        # Register handlers
-        self._register_handlers()
-    
-    def _register_handlers(self):
-        """Register MCP handlers."""
-        
-        @self.server.list_tools()
-        async def list_tools():
-            """List available tools."""
-            tools = []
-            
-            # OAuth2 tools
-            oauth_tools = create_oauth2_tools(self.oauth_provider)
-            tools.extend(oauth_tools)
-            
-            # Teams-specific tools
-            tools.extend([
-                create_list_chats_tool(self.teams_client),
-                create_create_chat_tool(self.teams_client),
-                create_send_message_tool(self.teams_client),
-                create_get_messages_tool(self.teams_client)
-            ])
-            
-            return tools
-        
-        @self.server.call_tool()
-        async def call_tool(name: str, arguments: dict):
-            """Call a tool."""
-            # Get all tools
-            tools = await list_tools()
-            
-            # Find the requested tool
-            tool = next((t for t in tools if t.name == name), None)
-            if not tool:
-                raise ValueError(f"Tool '{name}' not found")
-            
-            # Call the tool's handler
-            handler = getattr(tool, 'handler', None)
-            if not handler:
-                raise ValueError(f"Tool '{name}' has no handler")
-            
-            return await handler(arguments)
-    
-    async def run(self):
-        """Run the server."""
-        logger.info(f"Starting {self.config.server_name} v{self.config.server_version}")
-        
-        # Run with stdio transport
-        async with stdio_server() as (read_stream, write_stream):
-            init_options = InitializationOptions(
-                server_name=self.config.server_name,
-                server_version=self.config.server_version,
-                capabilities=ServerCapabilities(
-                    tools={}  # We register tools dynamically
+    # If tokens provided, validate them
+    if tokens and tokens.get("access_token"):
+        try:
+            # Check if refresh token exists and access token might be expired
+            if tokens.get("refresh_token"):
+                from mcp_oauth2 import TokenResponse
+                token_response = TokenResponse(
+                    access_token=tokens["access_token"],
+                    refresh_token=tokens.get("refresh_token"),
+                    expires_at=tokens.get("expires_at")
                 )
-            )
+                
+                if token_response.is_expired() and token_response.refresh_token:
+                    new_tokens = await oauth_provider.refresh_token(token_response.refresh_token)
+                    return {
+                        "authenticated": True,
+                        "tokens": new_tokens.to_dict(),
+                        "message": "Tokens refreshed successfully"
+                    }
             
-            await self.server.run(
-                read_stream,
-                write_stream,
-                initialization_options=init_options
-            )
+            return {
+                "authenticated": True,
+                "message": "Valid tokens provided"
+            }
+        except Exception as e:
+            return {
+                "authenticated": False,
+                "error": str(e),
+                "message": "Token validation failed"
+            }
+    
+    # No tokens, generate auth URL
+    if not callback_url:
+        return {
+            "authenticated": False,
+            "error": "callback_url required when tokens not provided"
+        }
+    
+    # Generate state for CSRF protection
+    state = secrets.token_urlsafe(32)
+    
+    # Generate PKCE if provider supports it
+    auth_url = oauth_provider.build_auth_url(state)
+    code_verifier = None
+    
+    if oauth_provider.config.client_secret is None:  # Public client, use PKCE
+        code_verifier, code_challenge = oauth_provider.generate_pkce_pair()
+        # Store code_verifier somewhere accessible by authorize function
+        # For now, we'll include it in the response
+        auth_url = oauth_provider.build_auth_url(state, code_challenge)
+    
+    return {
+        "authenticated": False,
+        "auth_url": auth_url,
+        "state": state,
+        "callback_state": callback_state,
+        "message": f"Visit the auth_url to authenticate with {oauth_provider.name}"
+    }
+
+
+@mcp.tool()
+async def authorize(
+    code: str,
+    callback_url: str,
+    callback_state: Optional[Dict[str, Any]] = None,
+    code_verifier: Optional[str] = None
+) -> Dict[str, Any]:
+    """Exchange authorization code for Microsoft tokens."""
+    try:
+        # Exchange code for tokens
+        token_response = await oauth_provider.exchange_code(code, code_verifier)
+        
+        return {
+            "success": True,
+            "tokens": token_response.to_dict(),
+            "callback_state": callback_state,
+            "message": f"Successfully authenticated with {oauth_provider.name}"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Failed to exchange authorization code"
+        }
+
+
+# Teams Tools
+@mcp.tool()
+async def teams_list_chats(
+    access_token: str,
+    filter: Optional[str] = None,
+    limit: int = 50
+) -> List[Dict[str, Any]]:
+    """List all chats for the authenticated user."""
+    return await teams_client.list_chats(access_token)
+
+
+@mcp.tool()
+async def teams_create_chat(
+    access_token: str,
+    chat_type: str,
+    members: List[str]
+) -> Dict[str, Any]:
+    """Create a new Teams chat (one-on-one or group)."""
+    return await teams_client.create_chat(access_token, chat_type, members)
+
+
+@mcp.tool()
+async def teams_send_message(
+    access_token: str,
+    chat_id: str,
+    content: str
+) -> Dict[str, Any]:
+    """Send a message to a Teams chat."""
+    return await teams_client.send_message(access_token, chat_id, content)
+
+
+@mcp.tool()
+async def teams_get_messages(
+    access_token: str,
+    chat_id: str,
+    limit: int = 50
+) -> List[Dict[str, Any]]:
+    """Get messages from a Teams chat."""
+    return await teams_client.get_messages(access_token, chat_id, limit)
 
 
 def main():
     """Main entry point."""
-    # Load configuration
-    config = TeamsConfig()
-    
-    # Create and run server
-    server = TeamsServer(config)
-    asyncio.run(server.run())
+    logger.info(f"Starting {config.server_name} v{config.server_version}")
+    mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
